@@ -1,95 +1,88 @@
 import cv2
-import mediapipe as mp
-import math
+import numpy as np
+import pyautogui
+from HandDectionModule import HandDetector
 
-class handDetector():
-    def __init__(self, mode=False, maxHands=2, detectionCon=0.5, trackCon=0.5):
-        self.mode = mode
-        self.maxHands = maxHands
-        self.detectionCon = detectionCon
-        self.trackCon = trackCon
+class AirMouseControl:
+    def __init__(self, detection_confidence=0.8):
+        self.cap = cv2.VideoCapture(0)
+        self.detector = HandDetector(detection_confidence)
+        self.prev_x, self.prev_y = 0, 0
 
-        self.mpHands = mp.solutions.hands
-        self.hands = self.mpHands.Hands(
-            static_image_mode=self.mode,
-            max_num_hands=self.maxHands,
-            min_detection_confidence=float(self.detectionCon),  
-            min_tracking_confidence=float(self.trackCon)        
-        )
+    def detect_hands(self):
+        success, img = self.cap.read()
+        if not success:
+            return None, None
+        
+        hands, img = self.detector.find_hands(img)
+        return hands, img
+    
+    def define_hands(self, bbox, hand_type, img):
+        cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), (255, 0, 255), 2)
+        cv2.putText(img, hand_type, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
-        self.mpDraw = mp.solutions.drawing_utils
-        self.tipIds = [4, 8, 12, 16, 20]
+    def mouse_move(self, hand, img):
+        index_x, index_y = hand["lmList"][8]  
+        screen_x = np.interp(index_x, (100, img.shape[1] - 100), (self.detector.screen_width, 0))
+        screen_y = np.interp(index_y, (100, img.shape[0] - 100), (0, self.detector.screen_height))
 
-    def findHands(self, img, draw=True):
-        imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.results = self.hands.process(imgRGB)
+        cur_x = self.prev_x + (screen_x - self.prev_x) / self.detector.smooth_factor
+        cur_y = self.prev_y + (screen_y - self.prev_y) / self.detector.smooth_factor
+        pyautogui.moveTo(cur_x, cur_y)
 
-        if self.results.multi_hand_landmarks:
-            for handLms in self.results.multi_hand_landmarks:
-                if draw:
-                    self.mpDraw.draw_landmarks(img, handLms,
-                                               self.mpHands.HAND_CONNECTIONS)
+        return cur_x, cur_y
 
+    def mouse_click(self, type_click):
+        if type_click == "LEFT":
+            pyautogui.click()  
+        elif type_click == "RIGHT":
+            pyautogui.click(button='right')
+        
+    def mouse_scroll(self, type_scroll):
+        if type_scroll == "DOWN":
+            pyautogui.scroll(-20)
+        elif type_scroll == "UP":
+            pyautogui.scroll(20)
+                
+    def process_hands(self, hands, img):
+        if hands:
+            hand = hands[0]  
+            fingers = self.detector.fingers_up(hand)
+            bbox = hand["bbox"]
+            hand_type = hand["type"]
+            # print(fingers)
+
+            if len(hand["lmList"]) < 13:
+                return img
+
+            self.define_hands(bbox, hand_type, img)    
+            
+            if fingers == [0, 0, 0, 0, 0]:
+                self.mouse_scroll("DOWN")
+            elif fingers == [1, 0, 0, 0, 0]:
+                self.mouse_scroll("UP")
+
+            elif fingers[1] == 1 and fingers[2] == 1 and fingers[3] == 1:        
+                self.prev_x, self.prev_y = self.mouse_move(hand, img)
+
+            elif fingers[1] == 0 and fingers[2] == 1:
+                self.mouse_click("LEFT")
+            elif fingers[1] == 0 and fingers[2] == 0:
+                self.mouse_click("RIGHT")
+
+            cv2.putText(img, f"Mouse: ({int(self.prev_x)}, {int(self.prev_y)})", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+        
         return img
 
-    def findPosition(self, img, handNo=0, draw=True):
-        xList = []
-        yList = []
-        bbox = []
-        self.lmList = []
-
-        if self.results.multi_hand_landmarks:
-            myHand = self.results.multi_hand_landmarks[handNo]
-            for id, lm in enumerate(myHand.landmark):
-                # print(id, lm)
-                h, w, c = img.shape
-                cx, cy = int(lm.x * w), int(lm.y * h)
-                xList.append(cx)
-                yList.append(cy)
-                # print(id, cx, cy)
-                self.lmList.append([id, cx, cy])
-                if draw:
-                    cv2.circle(img, (cx, cy), 5, (255, 0, 255), cv2.FILLED)
-
-            xmin, xmax = min(xList), max(xList)
-            ymin, ymax = min(yList), max(yList)
-            bbox = xmin, ymin, xmax, ymax
-
-            if draw:
-                cv2.rectangle(img, (xmin - 20, ymin - 20), (xmax + 20, ymax + 20),
-                              (0, 255, 0), 2)
-
-        return self.lmList, bbox
-
-    def fingersUp(self):
-        fingers = []
+    def run(self):
+        while True:
+            hands, img = self.detect_hands()
+            if img is not None:
+                img = self.process_hands(hands, img)
+                cv2.imshow("Air Mouse Control", img)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
         
-        if self.lmList[self.tipIds[0]][1] > self.lmList[self.tipIds[0] - 1][1]:
-            fingers.append(1)
-        else:
-            fingers.append(0)
-
-        for id in range(1, 5):
-
-            if self.lmList[self.tipIds[id]][2] < self.lmList[self.tipIds[id] - 2][2]:
-                fingers.append(1)
-            else:
-                fingers.append(0)
-
-        # totalFingers = fingers.count(1)
-
-        return fingers
-
-    def findDistance(self, p1, p2, img, draw=True,r=15, t=3):
-        x1, y1 = self.lmList[p1][1:]
-        x2, y2 = self.lmList[p2][1:]
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-
-        if draw:
-            cv2.line(img, (x1, y1), (x2, y2), (255, 0, 255), t)
-            cv2.circle(img, (x1, y1), r, (255, 0, 255), cv2.FILLED)
-            cv2.circle(img, (x2, y2), r, (255, 0, 255), cv2.FILLED)
-            cv2.circle(img, (cx, cy), r, (0, 0, 255), cv2.FILLED)
-        length = math.hypot(x2 - x1, y2 - y1)
-
-        return length, img, [x1, y1, x2, y2, cx, cy]
+        self.cap.release()
+        cv2.destroyAllWindows()

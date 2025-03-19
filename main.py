@@ -1,5 +1,5 @@
-from VirtualMouse import VirtualMouse
+from HandTrackingModule import AirMouseControl
 
 if __name__ == "__main__":
-    virtual_mouse = VirtualMouse()
+    virtual_mouse = AirMouseControl()
     virtual_mouse.run()
